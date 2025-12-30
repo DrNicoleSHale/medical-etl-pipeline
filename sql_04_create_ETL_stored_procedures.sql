@@ -276,3 +276,96 @@ BEGIN
     -- Clear existing data for the periods we're loading
     DELETE FROM analytics.specialty_counts 
     WHERE report_period IN (
+        SELECT DISTINCT DATEFROMPARTS(YEAR(admit_date), MONTH(admit_date), 1)
+        FROM analytics.medical_encounters
+    );
+    
+    -- Pivot specialty counts by month
+    INSERT INTO analytics.specialty_counts (
+        report_period,
+        cardiology,
+        orthopedics,
+        neurology,
+        oncology,
+        internal_medicine,
+        emergency_medicine,
+        surgery,
+        pediatrics,
+        other,
+        total_encounters
+    )
+    SELECT 
+        report_period,
+        COALESCE([Cardiology], 0) AS cardiology,
+        COALESCE([Orthopedics], 0) AS orthopedics,
+        COALESCE([Neurology], 0) AS neurology,
+        COALESCE([Oncology], 0) AS oncology,
+        COALESCE([Internal Medicine], 0) AS internal_medicine,
+        COALESCE([Emergency Medicine], 0) AS emergency_medicine,
+        COALESCE([Surgery], 0) AS surgery,
+        COALESCE([Pediatrics], 0) AS pediatrics,
+        COALESCE([Unknown], 0) AS other,
+        -- Calculate total across all specialties
+        COALESCE([Cardiology], 0) + COALESCE([Orthopedics], 0) + 
+        COALESCE([Neurology], 0) + COALESCE([Oncology], 0) + 
+        COALESCE([Internal Medicine], 0) + COALESCE([Emergency Medicine], 0) + 
+        COALESCE([Surgery], 0) + COALESCE([Pediatrics], 0) + 
+        COALESCE([Unknown], 0) AS total_encounters
+    FROM (
+        SELECT 
+            DATEFROMPARTS(YEAR(admit_date), MONTH(admit_date), 1) AS report_period,
+            specialty,
+            event_id
+        FROM analytics.medical_encounters
+    ) AS source_data
+    PIVOT (
+        COUNT(event_id)
+        FOR specialty IN (
+            [Cardiology], [Orthopedics], [Neurology], [Oncology],
+            [Internal Medicine], [Emergency Medicine], [Surgery], 
+            [Pediatrics], [Unknown]
+        )
+    ) AS pivot_table;
+    
+    PRINT CONCAT('Loaded ', @@ROWCOUNT, ' rows into analytics.specialty_counts');
+END;
+GO
+
+
+-- ============================================================================
+-- MASTER PROCEDURE: Run Full ETL
+-- ============================================================================
+-- Orchestrates all ETL procedures in correct order
+-- ============================================================================
+
+CREATE OR ALTER PROCEDURE usp_run_full_etl
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    PRINT '========================================';
+    PRINT 'Starting Medical Data ETL Pipeline';
+    PRINT CONCAT('Run Time: ', GETDATE());
+    PRINT '========================================';
+    
+    -- Run in dependency order
+    PRINT 'Step 1: Loading medical encounters...';
+    EXEC usp_load_medical_encounters;
+    
+    PRINT 'Step 2: Loading cost summary...';
+    EXEC usp_load_cost_summary;
+    
+    PRINT 'Step 3: Loading first visits...';
+    EXEC usp_load_first_visits;
+    
+    PRINT 'Step 4: Loading readmission analysis...';
+    EXEC usp_load_readmissions;
+    
+    PRINT 'Step 5: Loading specialty counts...';
+    EXEC usp_load_specialty_counts;
+    
+    PRINT '========================================';
+    PRINT 'ETL Pipeline Complete!';
+    PRINT '========================================';
+END;
+GO
